@@ -1,6 +1,8 @@
 #include "uparam.h"
 #include <fal.h>
 #include <finsh.h>
+#include <string.h>
+#include <stdio.h>
 
 #define UPARAM_DEBUG
 #define UPARAM_FINSH
@@ -358,7 +360,7 @@ static void print_list_header()
   */
 static void print_element(param_p *pa, uint32_t index, uint32_t offset)
 {
-    uint16_t len;
+    uint16_t len = 0;
     char buff[64];
     char value[8];
     param_list *pa_list = (param_list *)pa;
@@ -436,7 +438,7 @@ static void print_element(param_p *pa, uint32_t index, uint32_t offset)
             //最长只打印5个数字
             for (int s = 0; s < (pa->size / 4 - offset) && s < 5; s++)
             {
-                len += sprintf(buff + len, "%08X ", *((uint32_t *)(pa->address) + offset + s));
+                len += sprintf(buff + len, "%08lX ", (unsigned long)*((uint32_t *)(pa->address) + offset + s));
             }
         }
         else if (pa_list->type[1] == 'f')
@@ -449,7 +451,17 @@ static void print_element(param_p *pa, uint32_t index, uint32_t offset)
                 len += sprintf(buff + len, "%.3f ", *((float *)(pa->address) + offset + s));
             }
         }
+        else
+        {
+            /**未知的vector类型 */
+            len = sprintf(buff, "V Unknown");
+        }
         len += sprintf(buff + len, "\r\n");
+    }
+    else
+    {
+        /**未知的参数类型 */
+        len = sprintf(buff, "Unknown Type\r\n");
     }
     rt_kprintf("%s", buff);
 }
@@ -642,7 +654,7 @@ static void par(uint8_t argc, char **argv)
                 return;
             }
 
-            rt_kprintf("reset param , index: %d\r\n", index);
+            rt_kprintf("reset param , index: %lu\r\n", (unsigned long)index);
             reset_param_by_index(index);
         }
         else if (!strcmp(cmd, "set"))
@@ -669,33 +681,33 @@ static void par(uint8_t argc, char **argv)
             {
                 float value_f = (float)atof(argv[4]);
                 *(float *)(pa_list->address) = value_f;
-                char buff[32];
-                memset(buff, 0, 32);
-                sprintf(buff, "set index: %d, to value:%.5f \r\n", index, value_f);
+                char buff[64];
+                memset(buff, 0, 64);
+                sprintf(buff, "set index: %lu, to value:%.5f \r\n", (unsigned long)index, value_f);
                 rt_kprintf("%s \r\n", buff);
             }
             else if (pa_list->type[0] == 'd')
             {
                 long long value_d = atoll(argv[4]);
-							  unsigned long long value_ud = (long long)1<<63;
-							  value_ud = value_d & ~value_ud;
+                unsigned long long value_ud = (long long)1<<63;
+                value_ud = value_d & ~value_ud;
                 memcpy((uint8_t *)pa_list->address, &value_ud, pa_list->size);
                 if (value_d < 0)
                 {
                     *((uint8_t *)pa_list->address + pa_list->size - 1) |= 0x80;
                 }
-								char buff[32];
-                memset(buff, 0, 32);
-                sprintf(buff, "set index: %d, to value:%lld \r\n", index, value_d);
+                char buff[64];
+                memset(buff, 0, 64);
+                sprintf(buff, "set index: %lu, to value:%lld \r\n", (unsigned long)index, value_d);
                 rt_kprintf("%s \r\n", buff);
             }
             else if (pa_list->type[0] == 'u')
             {
                 long long value_u = atoll(argv[4]);
                 memcpy((uint8_t *)pa_list->address, &value_u, pa_list->size);
-                char buff[32];
-                memset(buff, 0, 32);
-                sprintf(buff, "set index: %d, to value:%lld \r\n", index, value_u);
+                char buff[64];
+                memset(buff, 0, 64);
+                sprintf(buff, "set index: %lu, to value:%lld \r\n", (unsigned long)index, value_u);
                 rt_kprintf("%s \r\n", buff);
             }
             else if (pa_list->type[0] == 's')
@@ -708,7 +720,7 @@ static void par(uint8_t argc, char **argv)
                 }
                 memset(pa_list->address, 0, pa_list->size);
                 memcpy((uint8_t *)pa_list->address, value_s, strlen(value_s));
-                rt_kprintf("set index: %d, to value:%s\r\n", index, value_s);
+                rt_kprintf("set index: %lu, to value:%s\r\n", (unsigned long)index, value_s);
             }
             else if (pa_list->type[0] == 'v')
             {
@@ -723,7 +735,7 @@ static void par(uint8_t argc, char **argv)
                         rt_kprintf("offset error,data size: %d\r\n", pa_list->size);
                         return;
                     }
-                    rt_kprintf("set index: %d, offset: %d, to value:", index, offset);
+                    rt_kprintf("set index: %lu, offset: %lu, to value:", (unsigned long)index, (unsigned long)offset);
                     for (uint8_t i = 0; i < input_size && i < pa_list->size; i++)
                     {
                         v = atoi(argv[4 + i]);
@@ -739,7 +751,7 @@ static void par(uint8_t argc, char **argv)
                         rt_kprintf("offset error,data size: %d\r\n", pa_list->size);
                         return;
                     }
-                    rt_kprintf("set index: %d, offset: %d, to value:", index, offset);
+                    rt_kprintf("set index: %lu, offset: %lu, to value:", (unsigned long)index, (unsigned long)offset);
                     for (uint8_t i = 0; i < input_size && i < (pa_list->size / 2); i++)
                     {
                         v = atoi(argv[4 + i]);
@@ -755,12 +767,12 @@ static void par(uint8_t argc, char **argv)
                         rt_kprintf("offset error,data size: %d\r\n", pa_list->size);
                         return;
                     }
-                    rt_kprintf("set index: %d, offset: %d, to value:", index, offset);
+                    rt_kprintf("set index: %lu, offset: %lu, to value:", (unsigned long)index, (unsigned long)offset);
                     for (uint8_t i = 0; i < input_size && i < (pa_list->size / 4); i++)
                     {
                         v = atoi(argv[4 + i]);
                         *((uint32_t *)pa_list->address + offset + i) = (uint32_t)v;
-                        rt_kprintf("%d ", (uint32_t)v);
+                        rt_kprintf("%lu ", (unsigned long)v);
                     }
                 }
                 else if (pa_list->type[1] == 'f')
@@ -771,7 +783,7 @@ static void par(uint8_t argc, char **argv)
                         rt_kprintf("offset error,data size: %d\r\n", pa_list->size);
                         return;
                     }
-                    rt_kprintf("set index: %d, offset: %d, to value:", index, offset);
+                    rt_kprintf("set index: %lu, offset: %lu, to value:", (unsigned long)index, (unsigned long)offset);
 
                     char sbuff[128] = {0};
                     char slen = 0;
