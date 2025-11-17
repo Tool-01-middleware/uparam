@@ -73,7 +73,6 @@ rt_err_t uparam_add_list(param_list *list_address, uint16_t list_size)
         {
             pa_this = list_address + i;
             param_header.size.u32 += pa_this->size;
-            LOG_D("add param suc,name: %s , address: 0x%X, size: %d", pa_this->name, pa_this->address, pa_this->size);
         }
         param_header.cnt.u32 += list_size;
         LOG_D("add param list success, list size: %d, data size total: %d", list_size, param_header.size.u32);
@@ -165,8 +164,6 @@ static uint16_t uparam_readall()
         //检查CRC
         check = cal_crc(0x55, temp, pa_this.size);
 
-        LOG_D("read param address 0x%X, size:%d, crc:%X, calc:%X", pa_this.address, pa_this.size, check, temp[pa_this.size]);
-
         if (check != temp[pa_this.size])
         {
             LOG_E("Uparam check data failed! Index:%d, Address:%X", i, (uint32_t)pa_this.address);
@@ -219,372 +216,321 @@ static uint16_t uparam_readall()
 
         pa_next = (param_p *)(temp + pa_this.size + 1);
     }
-    LOG_D("read param success count: %d", read_num);
+
+    if (read_num > 0) {
+      LOG_I("Read %d/%d parameters from flash", read_num, header.cnt.u32);
+    } else {
+      LOG_W("No parameters read from flash");
+    }
 
     return read_num;
 }
 
 /**
-  * @brief  uparam_writeall
-  * @note   将参数表里面所有参数写入到flash
-  * @retval 
-  */
-static uint16_t uparam_writeall()
-{
-    uint32_t offset = 0;
-    uint8_t temp[270];
-    param_list *pa_list;
-    param_p *pa;
-    uint8_t wsize = sizeof(param_header_struct);
+ * @brief  uparam_writeall
+ * @note   将参数表里面所有参数写入到flash
+ * @retval
+ */
+static uint16_t uparam_writeall() {
+  uint32_t offset = 0;
+  uint8_t temp[270];
+  param_list *pa_list;
+  param_p *pa;
+  uint8_t wsize = sizeof(param_header_struct);
 
-    if (write_protect < 1)
-    {
-        LOG_E("Uparam should read once before write!");
+  if (write_protect < 1) {
+    LOG_E("Uparam should read once before write!");
+    return 0;
+  }
+
+  // 计算要写入的总字节数 header+ 数据头+数据+校验
+  int allsize = wsize + sizeof(param_p) * param_header.cnt.u32 + param_header.size.u32 + param_header.cnt.u32;
+
+  // 擦除flash
+  fal_partition_erase(par_part, 0, allsize);
+
+  offset = wsize;
+  // 循环写入所有参数
+  for (int li = 0; li < param_index; li++) {
+    pa_list = (param_list *)ls[li].par_list_add;
+
+    for (int i = 0; i < ls[li].par_list_size; i++) {
+      pa = (param_p *)&pa_list[i];
+
+      memcpy(temp, pa, sizeof(param_p));
+      // 准备数据
+      memcpy(temp + sizeof(param_p), (void *)(pa->address), pa->size);
+      temp[sizeof(param_p) + pa->size] = cal_crc(0x55, (uint8_t *)(pa->address), pa->size);
+
+      // 写入 数据加一字节校验
+      wsize = sizeof(param_p) + pa->size + 1;
+      if (fal_partition_write(par_part, offset, temp, wsize) != wsize) {
+        LOG_E("Uparam write data failed!");
         return 0;
+      }
+      offset += wsize;
     }
+  }
 
-    //计算要写入的总字节数 header+ 数据头+数据+校验
-    int allsize = wsize + sizeof(param_p) * param_header.cnt.u32 + param_header.size.u32 + param_header.cnt.u32;
-    LOG_D("Uparam write, cnt: %d, data size: %d, all size: %d!", param_header.cnt.u32, param_header.size.u32, allsize);
-
-    //擦除flash
-    fal_partition_erase(par_part, 0, allsize);
-
-    offset = wsize;
-    //循环写入所有参数
-    for (int li = 0; li < param_index; li++)
-    {
-        pa_list = (param_list *)ls[li].par_list_add;
-
-        for (int i = 0; i < ls[li].par_list_size; i++)
-        {
-            pa = (param_p *)&pa_list[i];
-
-            memcpy(temp, pa, sizeof(param_p));
-            //准备数据
-            memcpy(temp + sizeof(param_p), (void *)(pa->address), pa->size);
-            temp[sizeof(param_p) + pa->size] = cal_crc(0x55, (uint8_t *)(pa->address), pa->size);
-
-            LOG_D("write [%-16s], size:%d, crc:%X", pa_list[i].name, pa->size, temp[sizeof(param_p) + pa->size]);
-
-            //写入 数据加一字节校验
-            wsize = sizeof(param_p) + pa->size + 1;
-            if (fal_partition_write(par_part, offset, temp, wsize) != wsize)
-            {
-                LOG_E("Uparam write data failed!");
-                return 0;
-            }
-            offset += wsize;
-        }
-    }
-
-    //最后写入header
-    wsize = sizeof(param_header_struct);
-    param_header.header = 0x55;
-    param_header.crc = cal_crc(0x55, param_header.cnt.u8, 4);
-    param_header.crc = cal_crc(param_header.crc, param_header.size.u8, 4);
-    if (fal_partition_write(par_part, 0, (uint8_t *)&param_header, wsize) != wsize)
-    {
-        LOG_E("Uparam write header failed!");
-        return 0;
-    }
-    LOG_D("Uparam write param, cnt: %d, write size: %d!", param_header.cnt.u32, offset - wsize);
-    return param_header.cnt.u32;
+  // 最后写入header
+  wsize = sizeof(param_header_struct);
+  param_header.header = 0x55;
+  param_header.crc = cal_crc(0x55, param_header.cnt.u8, 4);
+  param_header.crc = cal_crc(param_header.crc, param_header.size.u8, 4);
+  if (fal_partition_write(par_part, 0, (uint8_t *)&param_header, wsize) != wsize) {
+    LOG_E("Uparam write header failed!");
+    return 0;
+  }
+  LOG_I("Save %d parameters to flash successfully (total size: %d bytes)", param_header.cnt.u32, offset - wsize);
+  return param_header.cnt.u32;
 }
 
 /**
-  * @brief  
-  * @note   
-  * @retval 
-  */
-uint16_t uparam_flush()
-{
-    return uparam_writeall();
+ * @brief
+ * @note
+ * @retval
+ */
+uint16_t uparam_flush() { return uparam_writeall(); }
+
+/**
+ * @brief  uparam_default
+ * @note   还原参数到默认值
+ * @retval None
+ */
+static void uparam_default() {
+  uint16_t reset_count = 0;
+
+  // 对新加入的数据执行默认操作
+  // 遍历没有读出的数据
+  param_list *pa_list_t;
+  for (int li = 0; li < param_index; li++) {
+    pa_list_t = (param_list *)ls[li].par_list_add;
+
+    for (int i = 0; i < ls[li].par_list_size; i++) {
+      if ((ls[li].read_valid[i / 8] & (1 << i)) == 0) {
+        if (pa_list_t[i].default_fun != RT_NULL) {
+          pa_list_t[i].default_fun(pa_list_t[i].address, pa_list_t[i].size);
+          reset_count++;
+        } else {
+          LOG_E("reset error [%-16s], address: 0x%X, default_fun is null", pa_list_t[i].name, pa_list_t[i].address);
+        }
+      }
+    }
+  }
+
+  if (reset_count > 0) {
+    LOG_I("Reset %d parameters to default values", reset_count);
+  }
 }
 
 /**
-  * @brief  uparam_default
-  * @note   还原参数到默认值
-  * @retval None
-  */
-static void uparam_default()
-{
-
-    //对新加入的数据执行默认操作
-    LOG_D("Reset changed param to default!");
-
-    //遍历没有读出的数据
-    param_list *pa_list_t;
-    for (int li = 0; li < param_index; li++)
-    {
-        pa_list_t = (param_list *)ls[li].par_list_add;
-
-        for (int i = 0; i < ls[li].par_list_size; i++)
-        {
-            if ((ls[li].read_valid[i / 8] & (1 << i)) == 0)
-            {
-                //
-                LOG_D("reset param [%-16s], address: 0x%X, size:%d", pa_list_t[i].name, pa_list_t[i].address, pa_list_t[i].size);
-                if (pa_list_t[i].default_fun != RT_NULL)
-                {
-                    pa_list_t[i].default_fun(pa_list_t[i].address, pa_list_t[i].size);
-                }
-                else
-                {
-                    LOG_E("reset error [%-16s], address: 0x%X, default_fun is null", pa_list_t[i].name, pa_list_t[i].address);
-                }
-            }
-        }
-    }
+ * @brief  打印参数列表的描述信息
+ * @note
+ * @retval None
+ */
+static void print_list_header() {
+  rt_kprintf("\nFormat show as: f=float,d=int,u=uint,v*=vector(hex or float),s=str\r\n");
+  rt_kprintf("Index Param            Address     Size  Format  Value\r\n");
+  rt_kprintf("----- ----------       ----------  ----  ------  -----\r\n");
 }
 
 /**
-  * @brief  打印参数列表的描述信息
-  * @note   
-  * @retval None
-  */
-static void print_list_header()
-{
-    rt_kprintf("\nFormat show as: f=float,d=int,u=uint,v*=vector(hex or float),s=str\r\n");
-    rt_kprintf("Index Param            Address     Size  Format  Value\r\n");
-    rt_kprintf("----- ----------       ----------  ----  ------  -----\r\n");
+ * @brief  打印单个参数
+ * @note
+ * @param  *pa:
+ * @param  index:
+ * @param  offset: 数组类型的打印起始偏移
+ * @retval None
+ */
+static void print_element(param_p *pa, uint32_t index, uint32_t offset) {
+  uint16_t len = 0;
+  char buff[64];
+  char value[8];
+  param_list *pa_list = (param_list *)pa;
+
+  // 打印信息
+  rt_kprintf("%-5d %-16s 0x%-8X  %-4d  ", index, (const char *)pa_list->name, pa->address, pa->size);
+
+  memset(buff, 0, sizeof(buff));
+  memset(value, 0, sizeof(value));
+
+  // 打印数据
+  if (pa_list->type[0] == 'f') {
+    memcpy(value, (uint8_t *)pa->address, pa->size);
+    len = sprintf(buff, "Float   %.3f\r\n", *(float *)(value));
+  } else if (pa_list->type[0] == 's') {
+    len = sprintf(buff, "String  %s\r\n", (char *)pa->address);
+  } else if (pa_list->type[0] == 'd') {
+    int64_t convert = 0;
+    if (pa->size == 1) {
+      convert = (int64_t)(*(int8_t *)(pa->address));
+    }
+    if (pa->size == 2) {
+      convert = (int64_t)(*(int16_t *)(pa->address));
+    }
+    if (pa->size == 4) {
+      convert = (int64_t)(*(int32_t *)(pa->address));
+    }
+    if (pa->size == 8) {
+      convert = (int64_t)(*(int64_t *)(pa->address));
+    }
+    len = sprintf(buff, "Intger  %lld\r\n", convert);
+  } else if (pa_list->type[0] == 'u') {
+    memcpy(value, (uint8_t *)pa->address, pa->size);
+    len = sprintf(buff, "UIntger %lld\r\n", *(uint64_t *)(value));
+  } else if (pa_list->type[0] == 'v') {
+    // vector 格式,判断下输出形式
+    if (pa_list->type[1] == 'b') {
+      /**按单字节打印输出 */
+      len = sprintf(buff, "V Byte  ");
+      // 最长只打印5个数字
+      for (int s = 0; s < pa->size && s < 5; s++) {
+        len += sprintf(buff + len, "%02X ", *((uint8_t *)(pa->address) + offset + s));
+      }
+    } else if (pa_list->type[1] == 'w') {
+      /**按双字节打印输出 */
+      len = sprintf(buff, "V Word  ");
+      // 最长只打印5个数字
+      for (int s = 0; s < (pa->size / 2 - offset) && s < 5; s++) {
+        len += sprintf(buff + len, "%04X ", *((uint16_t *)(pa->address) + offset + s));
+      }
+    } else if (pa_list->type[1] == 'd') {
+      /**按四字节打印输出 */
+      len = sprintf(buff, "V Dword ");
+      // 最长只打印5个数字
+      for (int s = 0; s < (pa->size / 4 - offset) && s < 5; s++) {
+        len += sprintf(buff + len, "%08lX ", (unsigned long)*((uint32_t *)(pa->address) + offset + s));
+      }
+    } else if (pa_list->type[1] == 'f') {
+      /**按float打印输出 */
+      len = sprintf(buff, "V Float ");
+      // 最长只打印5个数字
+      for (int s = 0; s < (pa->size / 4 - offset) && s < 5; s++) {
+        len += sprintf(buff + len, "%.3f ", *((float *)(pa->address) + offset + s));
+      }
+    } else {
+      /**未知的vector类型 */
+      len = sprintf(buff, "V Unknown");
+    }
+    len += sprintf(buff + len, "\r\n");
+  } else {
+    /**未知的参数类型 */
+    len = sprintf(buff, "Unknown Type\r\n");
+  }
+  rt_kprintf("%s", buff);
 }
 
 /**
-  * @brief  打印单个参数
-  * @note   
-  * @param  *pa: 
-  * @param  index: 
-  * @param  offset: 数组类型的打印起始偏移 
-  * @retval None
-  */
-static void print_element(param_p *pa, uint32_t index, uint32_t offset)
-{
-    uint16_t len = 0;
-    char buff[64];
-    char value[8];
-    param_list *pa_list = (param_list *)pa;
+ * @brief  uparam_list
+ * @note   打印参数
+ * @retval None
+ */
+static void uparam_list() {
+  param_list *pa_list;
+  param_p *pa;
+  uint32_t index = 0;
 
-    //打印信息
-    rt_kprintf("%-5d %-16s 0x%-8X  %-4d  ", index, (const char *)pa_list->name,
-               pa->address, pa->size);
+  print_list_header();
+  for (int li = 0; li < param_index; li++) {
+    pa_list = (param_list *)ls[li].par_list_add;
 
-    memset(buff, 0, sizeof(buff));
-    memset(value, 0, sizeof(value));
-
-    //打印数据
-    if (pa_list->type[0] == 'f')
-    {
-        memcpy(value, (uint8_t *)pa->address, pa->size);
-        len = sprintf(buff, "Float   %.3f\r\n", *(float *)(value));
+    for (int i = 0; i < ls[li].par_list_size; i++) {
+      pa = (param_p *)&pa_list[i];
+      print_element(pa, index++, 0);
     }
-    else if (pa_list->type[0] == 's')
-    {
-        len = sprintf(buff, "String  %s\r\n", (char *)pa->address);
-    }
-    else if (pa_list->type[0] == 'd')
-    {
-        int64_t convert = 0;
-        if (pa->size == 1)
-        {
-            convert = (int64_t)(*(int8_t *)(pa->address));
-        }
-        if (pa->size == 2)
-        {
-            convert = (int64_t)(*(int16_t *)(pa->address));
-        }
-        if (pa->size == 4)
-        {
-            convert = (int64_t)(*(int32_t *)(pa->address));
-        }
-        if (pa->size == 8)
-        {
-            convert = (int64_t)(*(int64_t *)(pa->address));
-        }
-        len = sprintf(buff, "Intger  %lld\r\n", convert);
-    }
-    else if (pa_list->type[0] == 'u')
-    {
-        memcpy(value, (uint8_t *)pa->address, pa->size);
-        len = sprintf(buff, "UIntger %lld\r\n", *(uint64_t *)(value));
-    }
-    else if (pa_list->type[0] == 'v')
-    {
-        //vector 格式,判断下输出形式
-        if (pa_list->type[1] == 'b')
-        {
-            /**按单字节打印输出 */
-            len = sprintf(buff, "V Byte  ");
-            //最长只打印5个数字
-            for (int s = 0; s < pa->size && s < 5; s++)
-            {
-                len += sprintf(buff + len, "%02X ", *((uint8_t *)(pa->address) + offset + s));
-            }
-        }
-        else if (pa_list->type[1] == 'w')
-        {
-            /**按双字节打印输出 */
-            len = sprintf(buff, "V Word  ");
-            //最长只打印5个数字
-            for (int s = 0; s < (pa->size / 2 - offset) && s < 5; s++)
-            {
-                len += sprintf(buff + len, "%04X ", *((uint16_t *)(pa->address) + offset + s));
-            }
-        }
-        else if (pa_list->type[1] == 'd')
-        {
-            /**按四字节打印输出 */
-            len = sprintf(buff, "V Dword ");
-            //最长只打印5个数字
-            for (int s = 0; s < (pa->size / 4 - offset) && s < 5; s++)
-            {
-                len += sprintf(buff + len, "%08lX ", (unsigned long)*((uint32_t *)(pa->address) + offset + s));
-            }
-        }
-        else if (pa_list->type[1] == 'f')
-        {
-            /**按float打印输出 */
-            len = sprintf(buff, "V Float ");
-            //最长只打印5个数字
-            for (int s = 0; s < (pa->size / 4 - offset) && s < 5; s++)
-            {
-                len += sprintf(buff + len, "%.3f ", *((float *)(pa->address) + offset + s));
-            }
-        }
-        else
-        {
-            /**未知的vector类型 */
-            len = sprintf(buff, "V Unknown");
-        }
-        len += sprintf(buff + len, "\r\n");
-    }
-    else
-    {
-        /**未知的参数类型 */
-        len = sprintf(buff, "Unknown Type\r\n");
-    }
-    rt_kprintf("%s", buff);
-}
-
-/**
-  * @brief  uparam_list
-  * @note   打印参数
-  * @retval None
-  */
-static void uparam_list()
-{
-
-    param_list *pa_list;
-    param_p *pa;
-    uint32_t index = 0;
-
-    print_list_header();
-    for (int li = 0; li < param_index; li++)
-    {
-        pa_list = (param_list *)ls[li].par_list_add;
-
-        for (int i = 0; i < ls[li].par_list_size; i++)
-        {
-            pa = (param_p *)&pa_list[i];
-            print_element(pa, index++, 0);
-        }
-    }
+  }
 }
 
 /**
  * @brief  find_param_by_index
  * @note   通过索引找到参数
- * @param  index: 
- * @retval 
+ * @param  index:
+ * @retval
  */
-static param_list *find_param_by_index(uint32_t index)
-{
-    uint32_t pre_index = 0;
-    param_list *pa_list;
+static param_list *find_param_by_index(uint32_t index) {
+  uint32_t pre_index = 0;
+  param_list *pa_list;
 
-    for (int li = 0; li < param_index; li++)
-    {
-        pa_list = (param_list *)ls[li].par_list_add;
-        if (index - pre_index < ls[li].par_list_size)
-        {
-            return (pa_list + (index - pre_index));
-        }
-        pre_index += ls[li].par_list_size;
+  for (int li = 0; li < param_index; li++) {
+    pa_list = (param_list *)ls[li].par_list_add;
+    if (index - pre_index < ls[li].par_list_size) {
+      return (pa_list + (index - pre_index));
     }
+    pre_index += ls[li].par_list_size;
+  }
 
-    return NULL;
+  return NULL;
 }
 
 /**
-  * @brief  reset_param_by_index
-  * @note   通过索引还原参数到默认值
-  * @param  index: 
-  * @retval None
-  */
-static void reset_param_by_index(uint32_t index)
-{
-    param_list *pa_list;
-    pa_list = find_param_by_index(index);
+ * @brief  reset_param_by_index
+ * @note   通过索引还原参数到默认值
+ * @param  index:
+ * @retval None
+ */
+static void reset_param_by_index(uint32_t index) {
+  param_list *pa_list;
+  pa_list = find_param_by_index(index);
 
-    if (pa_list->default_fun != RT_NULL)
-    {
-        pa_list->default_fun(pa_list->address, pa_list->size);
-    }
+  if (pa_list->default_fun != RT_NULL) {
+    pa_list->default_fun(pa_list->address, pa_list->size);
+  }
 }
 
 /**
-  * @brief  erase_all_param
-  * @note   擦除所有参数。都会被还原到默认值
-  * @retval None
-  */
-static void erase_all_param(void)
-{
-    //只需要擦除保存的header即可
-    fal_partition_erase(par_part, 0, sizeof(param_header_struct));
+ * @brief  erase_all_param
+ * @note   擦除所有参数。都会被还原到默认值
+ * @retval None
+ */
+static void erase_all_param(void) {
+  // 只需要擦除保存的header即可
+  fal_partition_erase(par_part, 0, sizeof(param_header_struct));
 
-    //清除参数读取标志
-    for (int li = 0; li < param_index; li++)
-    {
-        uint16_t bit_num = (ls[li].par_list_size % 8 == 0) ? (ls[li].par_list_size / 8) : (ls[li].par_list_size / 8 + 1);
-        memset(ls[li].read_valid, 0, bit_num);
-    }
-    //初始化参数到默认值
-    uparam_default();
+  // 清除参数读取标志
+  for (int li = 0; li < param_index; li++) {
+    uint16_t bit_num = (ls[li].par_list_size % 8 == 0) ? (ls[li].par_list_size / 8) : (ls[li].par_list_size / 8 + 1);
+    memset(ls[li].read_valid, 0, bit_num);
+  }
+  // 初始化参数到默认值
+  uparam_default();
 }
 
 /**
-  * @brief  uparam_init
-  * @note   初始化参数
-  * @retval 
-  */
-static int uparam_init(void)
-{
-    /* 寻找参数分区是否存在 */
-    if ((par_part = fal_partition_find(praram_partition)) == RT_NULL)
-    {
-        LOG_E("Uparam init failed! Partition (%s) find error!", praram_partition);
-        RT_ASSERT(RT_ERROR);
-        return RT_ERROR;
-    }
+ * @brief  uparam_init
+ * @note   初始化参数
+ * @retval
+ */
+static int uparam_init(void) {
+  /* 寻找参数分区是否存在 */
+  if ((par_part = fal_partition_find(praram_partition)) == RT_NULL) {
+    LOG_E("Uparam init failed! Partition (%s) find error!", praram_partition);
+    RT_ASSERT(RT_ERROR);
+    return RT_ERROR;
+  }
 
-    if (param_index < 1)
-    {
-        LOG_W("params num is zero, nothing to be done!");
-        return RT_EOK;
-    }
-
-    //加载参数失败
-    if (uparam_readall() < param_header.cnt.u32)
-    {
-        LOG_W("Uparam read failed, reset to default!");
-        //初始化参数到默认值
-        uparam_default();
-
-        //重新写入参数
-        uparam_writeall();
-    }
-
+  if (param_index < 1) {
+    LOG_W("params num is zero, nothing to be done!");
     return RT_EOK;
+  }
+
+  // 加载参数失败
+  uint16_t read_count = uparam_readall();
+  if (read_count < param_header.cnt.u32) {
+    LOG_W("Uparam read failed (%d/%d), reset to default and save", read_count, param_header.cnt.u32);
+    // 初始化参数到默认值
+    uparam_default();
+
+    // 重新写入参数
+    if (uparam_writeall() > 0) {
+      LOG_I("Parameters initialized and saved successfully");
+    } else {
+      LOG_E("Failed to save default parameters");
+    }
+  } else {
+    LOG_I("Parameters loaded successfully (%d parameters)", read_count);
+  }
+
+  return RT_EOK;
 }
 
 INIT_COMPONENT_EXPORT(uparam_init);
@@ -654,8 +600,8 @@ static void par(uint8_t argc, char **argv)
                 return;
             }
 
-            rt_kprintf("reset param , index: %lu\r\n", (unsigned long)index);
             reset_param_by_index(index);
+            rt_kprintf("Reset parameter index %lu to default value successfully\r\n", (unsigned long)index);
         }
         else if (!strcmp(cmd, "set"))
         {
@@ -805,23 +751,30 @@ static void par(uint8_t argc, char **argv)
                 rt_kprintf("Usage: %s.\n", help_info[CMD_ERASE_INDEX]);
                 return;
             }
-            if (!strcmp((const char *)argv[2], "yes"))
-            {
-                rt_kprintf("erase all param\r\n");
-                erase_all_param();
-            }
-            else
-            {
-                rt_kprintf("input yes to erase\r\n");
+            if (!strcmp((const char *)argv[2], "yes")) {
+              erase_all_param();
+              rt_kprintf("Erase all parameters successfully, reset to default values\r\n");
+            } else {
+              rt_kprintf("input yes to erase\r\n");
             }
         }
         else if (!strcmp(cmd, "flush"))
         {
-            uparam_flush();
+          uint16_t saved_count = uparam_flush();
+          if (saved_count > 0) {
+            rt_kprintf("Save %d parameters to flash successfully\r\n", saved_count);
+          } else {
+            rt_kprintf("Save parameters to flash failed\r\n");
+          }
         }
         else if (!strcmp(cmd, "reload"))
         {
-            uparam_readall();
+          uint16_t read_count = uparam_readall();
+          if (read_count > 0) {
+            rt_kprintf("Reload %d parameters from flash successfully\r\n", read_count);
+          } else {
+            rt_kprintf("Reload parameters from flash failed\r\n");
+          }
         }
     }
 }
