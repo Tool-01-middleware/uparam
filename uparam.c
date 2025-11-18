@@ -330,8 +330,8 @@ static void uparam_default() {
  */
 static void print_list_header() {
   rt_kprintf("\nFormat show as: f=float,d=int,u=uint,v*=vector(hex or float),s=str\r\n");
-  rt_kprintf("Index Param            Address     Size  Format  Value\r\n");
-  rt_kprintf("----- ----------       ----------  ----  ------  -----\r\n");
+  rt_kprintf("%-5s %-35s %-4s %-10s %s\r\n", "Index", "Param", "Size", "Format", "Value");
+  rt_kprintf("%-5s %-35s %-4s %-10s %s\r\n", "-----", "-----------------------------------", "----", "----------", "-----");
 }
 
 /**
@@ -343,81 +343,114 @@ static void print_list_header() {
  * @retval None
  */
 static void print_element(param_p *pa, uint32_t index, uint32_t offset) {
-  uint16_t len = 0;
-  char buff[64];
-  char value[8];
+  char format_buff[16];
+  char value_buff[128];
   param_list *pa_list = (param_list *)pa;
 
-  // 打印信息
-  rt_kprintf("%-5d %-16s 0x%-8X  %-4d  ", index, (const char *)pa_list->name, pa->address, pa->size);
-
-  memset(buff, 0, sizeof(buff));
-  memset(value, 0, sizeof(value));
+  memset(format_buff, 0, sizeof(format_buff));
+  memset(value_buff, 0, sizeof(value_buff));
 
   // 打印数据
   if (pa_list->type[0] == 'f') {
-    memcpy(value, (uint8_t *)pa->address, pa->size);
-    len = sprintf(buff, "Float   %.3f\r\n", *(float *)(value));
+    float value_f = *(float *)(pa->address);
+    sprintf(format_buff, "%-10s", "Float");
+    sprintf(value_buff, "%.3f", value_f);
   } else if (pa_list->type[0] == 's') {
-    len = sprintf(buff, "String  %s\r\n", (char *)pa->address);
-  } else if (pa_list->type[0] == 'd') {
+    sprintf(format_buff, "%-10s", "String");
+    sprintf(value_buff, "%s", (char *)pa->address);
+  } else if (pa_list->type[0] == 'd' || pa_list->type[0] == 'i') {
+    // 'd' 或 'i' 开头的类型都是有符号整数
     int64_t convert = 0;
     if (pa->size == 1) {
       convert = (int64_t)(*(int8_t *)(pa->address));
-    }
-    if (pa->size == 2) {
+    } else if (pa->size == 2) {
       convert = (int64_t)(*(int16_t *)(pa->address));
-    }
-    if (pa->size == 4) {
+    } else if (pa->size == 4) {
       convert = (int64_t)(*(int32_t *)(pa->address));
-    }
-    if (pa->size == 8) {
+    } else if (pa->size == 8) {
       convert = (int64_t)(*(int64_t *)(pa->address));
     }
-    len = sprintf(buff, "Intger  %lld\r\n", convert);
+    sprintf(format_buff, "%-10s", "Integer");
+    sprintf(value_buff, "%lld", convert);
   } else if (pa_list->type[0] == 'u') {
-    memcpy(value, (uint8_t *)pa->address, pa->size);
-    len = sprintf(buff, "UIntger %lld\r\n", *(uint64_t *)(value));
+    uint64_t convert = 0;
+    if (pa->size == 1) {
+      convert = (uint64_t)(*(uint8_t *)(pa->address));
+    }
+    if (pa->size == 2) {
+      convert = (uint64_t)(*(uint16_t *)(pa->address));
+    }
+    if (pa->size == 4) {
+      convert = (uint64_t)(*(uint32_t *)(pa->address));
+    }
+    if (pa->size == 8) {
+      convert = (uint64_t)(*(uint64_t *)(pa->address));
+    }
+    sprintf(format_buff, "%-10s", "UInteger");
+    sprintf(value_buff, "%llu", convert);
   } else if (pa_list->type[0] == 'v') {
     // vector 格式,判断下输出形式
     if (pa_list->type[1] == 'b') {
       /**按单字节打印输出 */
-      len = sprintf(buff, "V Byte  ");
+      sprintf(format_buff, "%-10s", "V Byte");
       // 最长只打印5个数字
       for (int s = 0; s < pa->size && s < 5; s++) {
-        len += sprintf(buff + len, "%02X ", *((uint8_t *)(pa->address) + offset + s));
+        if (s > 0) {
+          strcat(value_buff, " ");
+        }
+        char temp[4];
+        sprintf(temp, "%02X", *((uint8_t *)(pa->address) + offset + s));
+        strcat(value_buff, temp);
       }
     } else if (pa_list->type[1] == 'w') {
       /**按双字节打印输出 */
-      len = sprintf(buff, "V Word  ");
+      sprintf(format_buff, "%-10s", "V Word");
       // 最长只打印5个数字
       for (int s = 0; s < (pa->size / 2 - offset) && s < 5; s++) {
-        len += sprintf(buff + len, "%04X ", *((uint16_t *)(pa->address) + offset + s));
+        if (s > 0) {
+          strcat(value_buff, " ");
+        }
+        char temp[6];
+        sprintf(temp, "%04X", *((uint16_t *)(pa->address) + offset + s));
+        strcat(value_buff, temp);
       }
     } else if (pa_list->type[1] == 'd') {
       /**按四字节打印输出 */
-      len = sprintf(buff, "V Dword ");
+      sprintf(format_buff, "%-10s", "V Dword");
       // 最长只打印5个数字
       for (int s = 0; s < (pa->size / 4 - offset) && s < 5; s++) {
-        len += sprintf(buff + len, "%08lX ", (unsigned long)*((uint32_t *)(pa->address) + offset + s));
+        if (s > 0) {
+          strcat(value_buff, " ");
+        }
+        char temp[10];
+        sprintf(temp, "%08lX", (unsigned long)*((uint32_t *)(pa->address) + offset + s));
+        strcat(value_buff, temp);
       }
     } else if (pa_list->type[1] == 'f') {
       /**按float打印输出 */
-      len = sprintf(buff, "V Float ");
+      sprintf(format_buff, "%-10s", "V Float");
       // 最长只打印5个数字
       for (int s = 0; s < (pa->size / 4 - offset) && s < 5; s++) {
-        len += sprintf(buff + len, "%.3f ", *((float *)(pa->address) + offset + s));
+        if (s > 0) {
+          strcat(value_buff, " ");
+        }
+        char temp[16];
+        sprintf(temp, "%.3f", *((float *)(pa->address) + offset + s));
+        strcat(value_buff, temp);
       }
     } else {
       /**未知的vector类型 */
-      len = sprintf(buff, "V Unknown");
+      sprintf(format_buff, "%-10s", "V Unknown");
+      sprintf(value_buff, "-");
     }
-    len += sprintf(buff + len, "\r\n");
   } else {
     /**未知的参数类型 */
-    len = sprintf(buff, "Unknown Type\r\n");
+    sprintf(format_buff, "%-10s", "Unknown");
+    sprintf(value_buff, "-");
   }
-  rt_kprintf("%s", buff);
+  
+  // 打印格式化的信息（去掉地址列，确保所有列左对齐）
+  rt_kprintf("%-5d %-35s %-4d %-10s %s\r\n", index, (const char *)pa_list->name, pa->size, format_buff, value_buff);
 }
 
 /**
