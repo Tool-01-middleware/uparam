@@ -403,15 +403,15 @@ static void print_element(param_p *pa, uint32_t index, uint32_t offset) {
         strcat(value_buff, temp);
       }
     } else if (pa_list->type[1] == 'w') {
-      /**按双字节打印输出 */
+      /**按双字节打印输出 - 十进制格式 */
       sprintf(format_buff, "%-10s", "V Word");
       // 最长只打印5个数字
       for (int s = 0; s < (pa->size / 2 - offset) && s < 5; s++) {
         if (s > 0) {
           strcat(value_buff, " ");
         }
-        char temp[6];
-        sprintf(temp, "%04X", *((uint16_t *)(pa->address) + offset + s));
+        char temp[8];
+        sprintf(temp, "%d", *((uint16_t *)(pa->address) + offset + s));
         strcat(value_buff, temp);
       }
     } else if (pa_list->type[1] == 'd') {
